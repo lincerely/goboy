@@ -44,8 +44,10 @@ var (
 
 func main() {
 	flag.Parse()
-	if *termMode {
+	if !*termMode {
 		pixelgl.Run(start)
+	} else {
+		start()
 	}
 }
 
@@ -85,9 +87,9 @@ func start() {
 	if *termMode {
 		monitor = iotui.NewTuiIOBinding(gameboy, *vsyncOff || *unlocked)
 	} else {
-		// Create the monitor for pixels
 		monitor = iopixel.NewPixelsIOBinding(gameboy, *vsyncOff || *unlocked)
 	}
+	defer monitor.Destroy()
 
 	startGBLoop(gameboy, monitor)
 }
@@ -118,6 +120,7 @@ func startGBLoop(gameboy *gb.Gameboy, monitor gbio.IOBinding) {
 			frames = 0
 		}
 	}
+
 }
 
 // Determine the ROM location. If the string in the flag value is empty then it
