@@ -15,6 +15,7 @@ import (
 	"github.com/Humpheh/goboy/pkg/gb"
 	"github.com/Humpheh/goboy/pkg/gbio"
 	"github.com/Humpheh/goboy/pkg/gbio/iopixel"
+	"github.com/Humpheh/goboy/pkg/gbio/iotui"
 	"github.com/faiface/pixel/pixelgl"
 )
 
@@ -31,8 +32,9 @@ const logo = `
 `
 
 var (
-	mute    = flag.Bool("mute", false, "mute sound output")
-	dmgMode = flag.Bool("dmg", false, "set to force dmg mode")
+	mute     = flag.Bool("mute", false, "mute sound output")
+	dmgMode  = flag.Bool("dmg", false, "set to force dmg mode")
+	termMode = flag.Bool("term", false, "display in tui")
 
 	cpuprofile  = flag.String("cpuprofile", "", "write cpu profile to file (debugging)")
 	vsyncOff    = flag.Bool("disableVsync", false, "set to disable vsync (debugging)")
@@ -42,12 +44,12 @@ var (
 
 func main() {
 	flag.Parse()
-	pixelgl.Run(start)
+	if *termMode {
+		pixelgl.Run(start)
+	}
 }
 
 func start() {
-	// Create the monitor for pixels
-	monitor := iopixel.NewPixelsIOBinding(*vsyncOff || *unlocked)
 
 	// Load the rom from the flag argument, or prompt with file select
 	rom := getROM()
@@ -79,7 +81,14 @@ func start() {
 		gameboy.Debug.OutputOpcodes = true
 	}
 
-	monitor.Gameboy = gameboy
+	var monitor gbio.IOBinding
+	if *termMode {
+		monitor = iotui.NewTuiIOBinding(gameboy, *vsyncOff || *unlocked)
+	} else {
+		// Create the monitor for pixels
+		monitor = iopixel.NewPixelsIOBinding(gameboy, *vsyncOff || *unlocked)
+	}
+
 	startGBLoop(gameboy, monitor)
 }
 

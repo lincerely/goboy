@@ -17,9 +17,9 @@ import (
 var PixelScale float64 = 3
 
 // NewPixelsIOBinding returns a new Pixelsgl IOBinding
-func NewPixelsIOBinding(disableVsync bool) *PixelsIOBinding {
+func NewPixelsIOBinding(gameboy *gb.Gameboy, disableVsync bool) *PixelsIOBinding {
 	monitor := PixelsIOBinding{}
-	monitor.Init(disableVsync)
+	monitor.Init(gameboy, disableVsync)
 	return &monitor
 }
 
@@ -31,7 +31,9 @@ type PixelsIOBinding struct {
 }
 
 // Init initialises the Pixels bindings.
-func (mon *PixelsIOBinding) Init(disableVsync bool) {
+func (mon *PixelsIOBinding) Init(gameboy *gb.Gameboy, disableVsync bool) {
+	mon.Gameboy = gameboy
+
 	cfg := pixelgl.WindowConfig{
 		Title: "GoBoy",
 		Bounds: pixel.R(
