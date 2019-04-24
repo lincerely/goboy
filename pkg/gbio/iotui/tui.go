@@ -21,6 +21,10 @@ type TuiIOBinding struct {
 	isRunning bool
 }
 
+const (
+	widthScale = 2
+)
+
 // Init the IOBinding
 func (t *TuiIOBinding) Init(gameboy *gb.Gameboy, disableVsync bool) {
 	t.Gameboy = gameboy
@@ -55,9 +59,10 @@ func (t *TuiIOBinding) RenderScreen() {
 			col := t.Gameboy.PreparedData[x][y]
 			color := tcell.NewRGBColor(int32(col[0]), int32(col[1]), int32(col[2]))
 			style := tcell.StyleDefault.Background(color)
-			t.Screen.SetContent(x*3, y, ' ', nil, style)
-			t.Screen.SetContent(x*3+1, y, ' ', nil, style)
-			t.Screen.SetContent(x*3+2, y, ' ', nil, style)
+
+			for i := 0; i < widthScale; i++ {
+				t.Screen.SetContent(x*widthScale+i, y, ' ', nil, style)
+			}
 		}
 	}
 	t.Screen.Show()
