@@ -4,6 +4,17 @@ import (
 	"github.com/Humpheh/goboy/pkg/bits"
 )
 
+const (
+	// ScreenWidth is the number of pixels width on the GameBoy LCD panel.
+	ScreenWidth = 160
+
+	// ScreenHeight is the number of pixels height on the GameBoy LCD panel.
+	ScreenHeight = 144
+
+	// LCDC is the main LCD Control register.
+	LCDC = 0xFF40
+)
+
 // Update the state of the graphics.
 func (gb *Gameboy) updateGraphics(cycles int) {
 	gb.setLCDStatus()
@@ -17,18 +28,24 @@ func (gb *Gameboy) updateGraphics(cycles int) {
 		gb.Memory.HighRAM[0x44]++
 		if gb.Memory.HighRAM[0x44] > 153 {
 			gb.PreparedData = gb.screenData
-			gb.screenData = [160][144][3]uint8{}
+			gb.screenData = [ScreenWidth][ScreenHeight][3]uint8{}
+			gb.bgPriority = [ScreenWidth][ScreenHeight]bool{}
 			gb.Memory.HighRAM[0x44] = 0
 		}
 
 		currentLine := gb.Memory.ReadHighRam(0xFF44)
 		gb.scanlineCounter += 456 * gb.getSpeed()
 
-		if currentLine == 144 {
+		if currentLine == ScreenHeight {
 			gb.requestInterrupt(0)
 		}
 	}
 }
+
+const (
+	lcdMode2Bounds = 456 - 80
+	lcdMode3Bounds = lcdMode2Bounds - 172
+)
 
 // Set the status of the LCD based on the current state of memory.
 func (gb *Gameboy) setLCDStatus() {
@@ -56,37 +73,34 @@ func (gb *Gameboy) setLCDStatus() {
 	var mode byte
 	requestInterrupt := false
 
-	if currentLine >= 144 {
+	switch {
+	case currentLine >= 144:
 		mode = 1
 		status = bits.Set(status, 0)
 		status = bits.Reset(status, 1)
 		requestInterrupt = bits.Test(status, 4)
-	} else {
-		mode2Bounds := 456 - 80
-		mode3Bounds := mode2Bounds - 172
-
-		if gb.scanlineCounter >= mode2Bounds {
-			if currentLine != gb.lastDrawnScanline {
-				// Draw the scanline at the start of the v-blank period
-				gb.drawScanline(gb.lastDrawnScanline)
-				gb.lastDrawnScanline = currentLine
-			}
-			mode = 2
-			status = bits.Reset(status, 0)
-			status = bits.Set(status, 1)
-			requestInterrupt = bits.Test(status, 5)
-		} else if gb.scanlineCounter >= mode3Bounds {
-			mode = 3
-			status = bits.Set(status, 0)
-			status = bits.Set(status, 1)
-		} else {
-			mode = 0
-			status = bits.Reset(status, 0)
-			status = bits.Reset(status, 1)
-			requestInterrupt = bits.Test(status, 3)
-			if mode != currentMode {
-				gb.Memory.hbHDMATransfer()
-			}
+	case gb.scanlineCounter >= lcdMode2Bounds:
+		mode = 2
+		status = bits.Reset(status, 0)
+		status = bits.Set(status, 1)
+		requestInterrupt = bits.Test(status, 5)
+	case gb.scanlineCounter >= lcdMode3Bounds:
+		mode = 3
+		status = bits.Set(status, 0)
+		status = bits.Set(status, 1)
+		if mode != currentMode {
+			// Draw the scanline when we start mode 3. In the real GameBoy
+			// this would be done throughout mode 3 by reading OAM and VRAM
+			// to generate the picture.
+			gb.drawScanline(currentLine)
+		}
+	default:
+		mode = 0
+		status = bits.Reset(status, 0)
+		status = bits.Reset(status, 1)
+		requestInterrupt = bits.Test(status, 3)
+		if mode != currentMode {
+			gb.Memory.doHDMATransfer()
 		}
 	}
 
@@ -94,7 +108,7 @@ func (gb *Gameboy) setLCDStatus() {
 		gb.requestInterrupt(1)
 	}
 
-	// Check is LYC == LY (coincidence flag)
+	// Check if LYC == LY (coincidence flag)
 	if currentLine == gb.Memory.ReadHighRam(0xFF45) {
 		status = bits.Set(status, 2)
 		// If enabled request an interrupt for this
@@ -110,13 +124,15 @@ func (gb *Gameboy) setLCDStatus() {
 
 // Checks if the LCD is enabled by examining 0xFF40.
 func (gb *Gameboy) isLCDEnabled() bool {
-	return bits.Test(gb.Memory.ReadHighRam(0xFF40), 7)
+	return bits.Test(gb.Memory.ReadHighRam(LCDC), 7)
 }
 
 // Draw a single scanline to the graphics output.
 func (gb *Gameboy) drawScanline(scanline byte) {
-	control := gb.Memory.ReadHighRam(0xFF40)
-	if bits.Test(control, 0) && !gb.Debug.HideBackground {
+	control := gb.Memory.ReadHighRam(LCDC)
+
+	// LCDC bit 0 clears tiles on DMG but controls priority on CGB.
+	if (gb.IsCGB() || bits.Test(control, 0)) && !gb.Debug.HideBackground {
 		gb.renderTiles(control, scanline)
 	}
 
@@ -213,15 +229,17 @@ func (gb *Gameboy) renderTiles(lcdControl byte, scanline byte) {
 
 		// Attributes used in CGB mode TODO: check in CGB mode
 		//
-		//	 Bit 0-2  Background Palette number  (BGP0-7)
-		//	 Bit 5    Horizontal Flip            (0=Normal, 1=Mirror horizontally)
-		//	 Bit 6    Vertical Flip              (0=Normal, 1=Mirror vertically)
-		//	 Bit 7    BG-to-OAM Priority         (0=Use OAM priority bit, 1=BG Priority
+		//    Bit 0-2  Background Palette number  (BGP0-7)
+		//    Bit 3    Tile VRAM Bank number      (0=Bank 0, 1=Bank 1)
+		//    Bit 5    Horizontal Flip            (0=Normal, 1=Mirror horizontally)
+		//    Bit 6    Vertical Flip              (0=Normal, 1=Mirror vertically)
+		//    Bit 7    BG-to-OAM Priority         (0=Use OAM priority bit, 1=BG Priority)
 		//
 		tileAttr := gb.Memory.VRAM[tileAddress-0x6000]
 		if gb.IsCGB() && bits.Test(tileAttr, 3) {
 			bankOffset = 0x6000
 		}
+		priority := bits.Test(tileAttr, 7)
 
 		var line byte
 		if gb.IsCGB() && bits.Test(tileAttr, 6) {
@@ -240,16 +258,17 @@ func (gb *Gameboy) renderTiles(lcdControl byte, scanline byte) {
 		}
 		colourBit := byte(int8((xPos%8)-7) * -1)
 		colourNum := (bits.Val(data2, colourBit) << 1) | bits.Val(data1, colourBit)
-		gb.setTilePixel(pixel, scanline, tileAttr, colourNum, palette)
+		gb.setTilePixel(pixel, scanline, tileAttr, colourNum, palette, priority)
 	}
 }
 
-func (gb *Gameboy) setTilePixel(x, y, tileAttr, colourNum, palette byte) {
+func (gb *Gameboy) setTilePixel(x, y, tileAttr, colourNum, palette byte, priority bool) {
 	// Set the pixel
 	if gb.IsCGB() {
 		cgbPalette := tileAttr & 0x7
 		red, green, blue := gb.BGPalette.get(cgbPalette, colourNum)
 		gb.setPixel(x, y, red, green, blue, true)
+		gb.bgPriority[x][y] = priority
 	} else {
 		red, green, blue := gb.getColour(colourNum, palette)
 		gb.setPixel(x, y, red, green, blue, true)
@@ -267,6 +286,8 @@ func (gb *Gameboy) getColour(colourNum byte, palette byte) (uint8, uint8, uint8)
 	return GetPaletteColour(col)
 }
 
+const spritePriorityOffset = 100
+
 // Render the sprites to the screen on the current scanline using the lcdControl register.
 func (gb *Gameboy) renderSprites(lcdControl byte, scanline int32) {
 	var ySize int32 = 8
@@ -278,10 +299,24 @@ func (gb *Gameboy) renderSprites(lcdControl byte, scanline int32) {
 	var palette1 = gb.Memory.ReadHighRam(0xFF48)
 	var palette2 = gb.Memory.ReadHighRam(0xFF49)
 
-	for sprite := 0; sprite < 40; sprite++ {
+	var minx [ScreenWidth]int32
+	var lineSprites = 0
+	for sprite := uint16(0); sprite < 40; sprite++ {
 		// Load sprite data from memory.
 		index := sprite * 4
+
+		// If this is true the scanline is out of the area we care about
 		yPos := int32(gb.Memory.Read(uint16(0xFE00+index))) - 16
+		if scanline < yPos || scanline >= (yPos+ySize) {
+			continue
+		}
+
+		// Only 10 sprites are allowed to be displayed on each line
+		if lineSprites >= 10 {
+			break
+		}
+		lineSprites++
+
 		xPos := int32(gb.Memory.Read(uint16(0xFE00+index+1))) - 8
 		tileLocation := gb.Memory.Read(uint16(0xFE00 + index + 2))
 		attributes := gb.Memory.Read(uint16(0xFE00 + index + 3))
@@ -291,14 +326,9 @@ func (gb *Gameboy) renderSprites(lcdControl byte, scanline int32) {
 		priority := !bits.Test(attributes, 7)
 
 		// Bank the sprite data in is (CGB only)
-		var bank uint16
-		if gb.IsCGB() {
-			bank = uint16((attributes & 0x8) >> 3)
-		}
-
-		// If this is true the scanline is out of the area we care about
-		if scanline < yPos || scanline >= (yPos+ySize) {
-			continue
+		var bank uint16 = 0
+		if gb.IsCGB() && bits.Test(attributes, 3) {
+			bank = 1
 		}
 
 		// Set the line to draw based on if the sprite is flipped on the y
@@ -314,6 +344,20 @@ func (gb *Gameboy) renderSprites(lcdControl byte, scanline int32) {
 
 		// Draw the line of the sprite
 		for tilePixel := byte(0); tilePixel < 8; tilePixel++ {
+			pixel := int16(xPos) + int16(7-tilePixel)
+			if pixel < 0 || pixel >= ScreenWidth {
+				continue
+			}
+
+			// Check if the pixel has priority.
+			//  - In DMG this is determined by the sprite with the smallest X coordinate,
+			//    then the first sprite in the OAM.
+			//  - In CGB this is determined by the first sprite appearing in the OAM.
+			// We add a fixed 100 to the xPos so we can use the 0 value as the absence of a sprite.
+			if minx[pixel] != 0 && (gb.IsCGB() || minx[pixel] <= xPos+spritePriorityOffset) {
+				continue
+			}
+
 			colourBit := tilePixel
 			if xFlip {
 				colourBit = byte(int8(colourBit-7) * -1)
@@ -326,24 +370,23 @@ func (gb *Gameboy) renderSprites(lcdControl byte, scanline int32) {
 			if colourNum == 0 {
 				continue
 			}
-			pixel := int16(xPos) + int16(7-tilePixel)
 
-			// Set the pixel if it is in bounds
-			if pixel >= 0 && pixel < 160 {
-				if gb.IsCGB() {
-					cgbPalette := attributes & 0x7
-					red, green, blue := gb.SpritePalette.get(cgbPalette, colourNum)
-					gb.setPixel(byte(pixel), byte(scanline), red, green, blue, priority)
-				} else {
-					// Determine the colour palette to use
-					var palette = palette1
-					if bits.Test(attributes, 4) {
-						palette = palette2
-					}
-					red, green, blue := gb.getColour(colourNum, palette)
-					gb.setPixel(byte(pixel), byte(scanline), red, green, blue, priority)
+			if gb.IsCGB() {
+				cgbPalette := attributes & 0x7
+				red, green, blue := gb.SpritePalette.get(cgbPalette, colourNum)
+				gb.setPixel(byte(pixel), byte(scanline), red, green, blue, priority)
+			} else {
+				// Determine the colour palette to use
+				var palette = palette1
+				if bits.Test(attributes, 4) {
+					palette = palette2
 				}
+				red, green, blue := gb.getColour(colourNum, palette)
+				gb.setPixel(byte(pixel), byte(scanline), red, green, blue, priority)
 			}
+
+			// Store the xpos of the sprite for this pixel for priority resolution
+			minx[pixel] = xPos + spritePriorityOffset
 		}
 	}
 }
@@ -351,7 +394,7 @@ func (gb *Gameboy) renderSprites(lcdControl byte, scanline int32) {
 // Set a pixel in the graphics screen data.
 func (gb *Gameboy) setPixel(x byte, y byte, r uint8, g uint8, b uint8, priority bool) {
 	// If priority is false then sprite pixel is only set if tile colour is 0
-	if priority || gb.tileScanline[x] == 0 {
+	if (priority && !gb.bgPriority[x][y]) || gb.tileScanline[x] == 0 {
 		gb.screenData[x][y][0] = r
 		gb.screenData[x][y][1] = g
 		gb.screenData[x][y][2] = b

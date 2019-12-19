@@ -25,31 +25,34 @@ type Gameboy struct {
 	CPU    *CPU
 	Sound  *apu.APU
 
-	Debug           DebugFlags
-	ExecutionPaused bool
+	Debug  DebugFlags
+	paused bool
 
 	timerCounter int
 
 	// Matrix of pixel data which is used while the screen is rendering. When a
 	// frame has been completed, this data is copied into the PreparedData matrix.
-	screenData [160][144][3]uint8
+	screenData [ScreenWidth][ScreenHeight][3]uint8
+	bgPriority [ScreenWidth][ScreenHeight]bool
+
 	// Track colour of tiles in scanline for priority management.
-	tileScanline      [160]uint8
-	scanlineCounter   int
-	lastDrawnScanline byte
-	screenCleared     bool
+	tileScanline    [ScreenWidth]uint8
+	scanlineCounter int
+	screenCleared   bool
 
 	// PreparedData is a matrix of screen pixel data for a single frame which has
 	// been fully rendered.
-	PreparedData [160][144][3]uint8
+	PreparedData [ScreenWidth][ScreenHeight][3]uint8
 
 	interruptsEnabling bool
 	interruptsOn       bool
 	halted             bool
 
-	mainInst  [0x100]func()
-	cbInst    [0x100]func()
-	InputMask byte
+	mainInst [0x100]func()
+	cbInst   [0x100]func()
+
+	// Mask of the currenly pressed buttons.
+	inputMask byte
 
 	// Flag if the game is running in cgb mode. For this to be true the game
 	// rom must support cgb mode and the option be true.
@@ -65,7 +68,7 @@ type Gameboy struct {
 
 // Update update the state of the gameboy by a single frame.
 func (gb *Gameboy) Update() int {
-	if gb.ExecutionPaused {
+	if gb.paused {
 		return 0
 	}
 
@@ -80,15 +83,22 @@ func (gb *Gameboy) Update() int {
 		} else {
 			// TODO: This is incorrect
 		}
-		if gb.IsCGB() {
-			gb.checkSpeedSwitch()
-		}
 		cycles += cyclesOp
 		gb.updateGraphics(cyclesOp)
 		gb.updateTimers(cyclesOp)
 		cycles += gb.doInterrupts()
 	}
 	return cycles
+}
+
+// SetPaused sets the paused state of the execution.
+func (gb *Gameboy) SetPaused(paused bool) {
+	gb.paused = paused
+}
+
+// IsPaused returns if the GameBoy is paused or not.
+func (gb *Gameboy) IsPaused() bool {
+	return gb.paused
 }
 
 // ToggleSoundChannel toggles a sound channel for debugging.
@@ -116,7 +126,6 @@ func (gb *Gameboy) getSpeed() int {
 
 // Check if the speed needs to be switched for CGB mode.
 func (gb *Gameboy) checkSpeedSwitch() {
-	// TODO: This should actually happen after a STOP after asking to switch
 	if gb.prepareSpeed {
 		// Switch speed
 		gb.prepareSpeed = false
@@ -179,12 +188,6 @@ func (gb *Gameboy) dividerRegister(cycles int) {
 		gb.CPU.Divider -= 255
 		gb.Memory.HighRAM[DIV-0xFF00]++
 	}
-}
-
-// RequestJoypadInterrupt triggers a joypad interrupt. To be called by the io
-// binding implementation.
-func (gb *Gameboy) RequestJoypadInterrupt() {
-	gb.requestInterrupt(4) // Joypad interrupt
 }
 
 // Request the Gameboy to perform an interrupt.
@@ -267,9 +270,9 @@ func (gb *Gameboy) popStack() uint16 {
 func (gb *Gameboy) joypadValue(current byte) byte {
 	var in byte = 0xF
 	if bits.Test(current, 4) {
-		in = gb.InputMask & 0xF
+		in = gb.inputMask & 0xF
 	} else if bits.Test(current, 5) {
-		in = (gb.InputMask >> 4) & 0xF
+		in = (gb.inputMask >> 4) & 0xF
 	}
 	return current | 0xc0 | in
 }
@@ -279,7 +282,7 @@ func (gb *Gameboy) IsGameLoaded() bool {
 	return gb.Memory != nil && gb.Memory.Cart != nil
 }
 
-// IsCGB returns if we are using CGB features
+// IsCGB returns if we are using CGB features.
 func (gb *Gameboy) IsCGB() bool {
 	return gb.cgbMode
 }
@@ -299,8 +302,6 @@ func (gb *Gameboy) init(romFile string) error {
 
 // Setup and instantitate the gameboys components.
 func (gb *Gameboy) setup() {
-	gb.ExecutionPaused = false
-
 	// Initialise the CPU
 	gb.CPU = &CPU{}
 	gb.CPU.Init(gb.options.cgbMode)
@@ -314,7 +315,7 @@ func (gb *Gameboy) setup() {
 
 	gb.Debug = DebugFlags{}
 	gb.scanlineCounter = 456
-	gb.InputMask = 0xFF
+	gb.inputMask = 0xFF
 
 	gb.mainInst = gb.mainInstructions()
 	gb.cbInst = gb.cbInstructions()

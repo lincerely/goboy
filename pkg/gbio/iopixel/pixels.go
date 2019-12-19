@@ -7,7 +7,6 @@ import (
 
 	"math"
 
-	"github.com/Humpheh/goboy/pkg/bits"
 	"github.com/Humpheh/goboy/pkg/gb"
 	"github.com/faiface/pixel"
 	"github.com/faiface/pixel/pixelgl"
@@ -36,7 +35,7 @@ func (mon *PixelsIOBinding) Init(disableVsync bool) {
 		Title: "GoBoy",
 		Bounds: pixel.R(
 			0, 0,
-			float64(160*PixelScale), float64(144*PixelScale),
+			float64(gb.ScreenWidth*PixelScale), float64(gb.ScreenHeight*PixelScale),
 		),
 		VSync:     !disableVsync,
 		Resizable: true,
@@ -53,9 +52,9 @@ func (mon *PixelsIOBinding) Init(disableVsync bool) {
 	mon.UpdateCamera()
 
 	mon.picture = &pixel.PictureData{
-		Pix:    make([]color.RGBA, 144*160),
-		Stride: 160,
-		Rect:   pixel.R(0, 0, 160, 144),
+		Pix:    make([]color.RGBA, gb.ScreenWidth*gb.ScreenHeight),
+		Stride: gb.ScreenWidth,
+		Rect:   pixel.R(0, 0, gb.ScreenWidth, gb.ScreenHeight),
 	}
 }
 
@@ -78,11 +77,11 @@ func (mon *PixelsIOBinding) IsRunning() bool {
 
 // RenderScreen renders the pixels on the screen.
 func (mon *PixelsIOBinding) RenderScreen() {
-	for y := 0; y < 144; y++ {
-		for x := 0; x < 160; x++ {
+	for y := 0; y < gb.ScreenHeight; y++ {
+		for x := 0; x < gb.ScreenWidth; x++ {
 			col := mon.Gameboy.PreparedData[x][y]
 			rgb := color.RGBA{R: col[0], G: col[1], B: col[2], A: 0xFF}
-			mon.picture.Pix[(143-y)*160+x] = rgb
+			mon.picture.Pix[(gb.ScreenHeight-1-y)*gb.ScreenWidth+x] = rgb
 		}
 	}
 
@@ -90,7 +89,7 @@ func (mon *PixelsIOBinding) RenderScreen() {
 	bg := color.RGBA{R: r, G: g, B: b, A: 0xFF}
 	mon.Window.Clear(bg)
 
-	spr := pixel.NewSprite(pixel.Picture(mon.picture), pixel.R(0, 0, 160, 144))
+	spr := pixel.NewSprite(pixel.Picture(mon.picture), pixel.R(0, 0, gb.ScreenWidth, gb.ScreenHeight))
 	spr.Draw(mon.Window, pixel.IM)
 
 	mon.UpdateCamera()
@@ -115,30 +114,23 @@ func (mon *PixelsIOBinding) SetTitle(fps int) {
 }
 
 // Mapping from keys to GB index.
-var keyMap = map[pixelgl.Button]byte{
-	// A button
-	pixelgl.KeyZ: 0,
-	// B button
-	pixelgl.KeyX: 1,
-	// SELECT button
-	pixelgl.KeyBackspace: 2,
-	// START button
-	pixelgl.KeyEnter: 3,
-	// RIGHT button
-	pixelgl.KeyRight: 4,
-	// LEFT button
-	pixelgl.KeyLeft: 5,
-	// UP button
-	pixelgl.KeyUp: 6,
-	// DOWN button
-	pixelgl.KeyDown: 7,
+var keyMap = map[pixelgl.Button]gb.Button{
+	pixelgl.KeyZ:         gb.ButtonA,
+	pixelgl.KeyX:         gb.ButtonB,
+	pixelgl.KeyBackspace: gb.ButtonSelect,
+	pixelgl.KeyEnter:     gb.ButtonStart,
+	pixelgl.KeyRight:     gb.ButtonRight,
+	pixelgl.KeyLeft:      gb.ButtonLeft,
+	pixelgl.KeyUp:        gb.ButtonUp,
+	pixelgl.KeyDown:      gb.ButtonDown,
 }
 
 // Extra key bindings to functions.
 var extraKeyMap = map[pixelgl.Button]func(*PixelsIOBinding){
 	// Pause execution
 	pixelgl.KeyEscape: func(mon *PixelsIOBinding) {
-		mon.Gameboy.ExecutionPaused = !mon.Gameboy.ExecutionPaused
+		// Toggle the paused state
+		mon.Gameboy.SetPaused(!mon.Gameboy.IsPaused())
 	},
 
 	// Change GB colour palette
@@ -152,14 +144,6 @@ var extraKeyMap = map[pixelgl.Button]func(*PixelsIOBinding){
 	},
 	pixelgl.KeyW: func(mon *PixelsIOBinding) {
 		mon.Gameboy.Debug.HideSprites = !mon.Gameboy.Debug.HideSprites
-	},
-	pixelgl.KeyA: func(mon *PixelsIOBinding) {
-		fmt.Println("BG Tile Palette:")
-		fmt.Println(mon.Gameboy.BGPalette.String())
-	},
-	pixelgl.KeyS: func(mon *PixelsIOBinding) {
-		fmt.Println("Sprite Palette:")
-		fmt.Println(mon.Gameboy.SpritePalette.String())
 	},
 	pixelgl.KeyD: func(mon *PixelsIOBinding) {
 		fmt.Println("BG Map:")
@@ -206,7 +190,7 @@ func (mon *PixelsIOBinding) toggleFullscreen() {
 
 // ProcessInput checks the input and process it.
 func (mon *PixelsIOBinding) ProcessInput() {
-	if mon.Gameboy.IsGameLoaded() && !mon.Gameboy.ExecutionPaused {
+	if mon.Gameboy.IsGameLoaded() && !mon.Gameboy.IsPaused() {
 		mon.processGBInput()
 	}
 	// Extra keys not related to emulation
@@ -219,13 +203,12 @@ func (mon *PixelsIOBinding) ProcessInput() {
 
 // Check the input and process it.
 func (mon *PixelsIOBinding) processGBInput() {
-	for key, offset := range keyMap {
+	for key, button := range keyMap {
 		if mon.Window.JustPressed(key) {
-			mon.Gameboy.InputMask = bits.Reset(mon.Gameboy.InputMask, offset)
-			mon.Gameboy.RequestJoypadInterrupt() // Joypad interrupt
+			mon.Gameboy.PressButton(button)
 		}
 		if mon.Window.JustReleased(key) {
-			mon.Gameboy.InputMask = bits.Set(mon.Gameboy.InputMask, offset)
+			mon.Gameboy.ReleaseButton(button)
 		}
 	}
 }
